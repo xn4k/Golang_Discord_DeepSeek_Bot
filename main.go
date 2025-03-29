@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"sort"
 	"syscall"
 
 	"github.com/bwmarrin/discordgo"
@@ -18,8 +20,20 @@ var (
 
 	commands = []*discordgo.ApplicationCommand{
 		{
+			Name:        "msgcount",
+			Description: "Zeigt die Top 5 aktivsten User",
+		},
+		{
 			Name:        "ping",
 			Description: "Antwortet mit Pong!",
+		},
+		{
+			Name:        "gibmir",
+			Description: "Gibt dir böse!",
+		},
+		{
+			Name:        "wtf",
+			Description: "Antwortet mit!",
 		},
 		{
 			Name:        "ask",
@@ -36,6 +50,8 @@ var (
 	}
 )
 
+var msgCount = make(map[string]int)
+
 // DeepSeek API Response-Struktur
 type DeepSeekAPIResponse struct {
 	Choices []struct {
@@ -49,6 +65,7 @@ func frageDeepSeek(prompt string) (string, error) {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
 		fmt.Println("Bitte setze die OPENROUTER_API_KEY Umgebungsvariable.")
+		fmt.Println("Aktueller Wert der Umgebungsvariable:", apiKey)
 	}
 
 	url := "https://openrouter.ai/api/v1/chat/completions"
@@ -113,19 +130,30 @@ func main() {
 		fmt.Println("Fehler beim Erstellen der Session:", err)
 		return
 	}
+	dg.AddHandler(messageCreate)
 
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds
 
 	dg.AddHandler(interactionCreate)
 
 	dg.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
-		for _, v := range commands {
-			_, err := s.ApplicationCommandCreate(s.State.User.ID, guildID, v)
+		validName := regexp.MustCompile(`^[\w-]{1,32}$`)
+
+		for _, cmd := range commands {
+			if !validName.MatchString(cmd.Name) {
+				fmt.Printf("❌ Ungültiger Command-Name: '%s' – wird übersprungen\n", cmd.Name)
+				continue
+			}
+
+			_, err := s.ApplicationCommandCreate(s.State.User.ID, guildID, cmd)
 			if err != nil {
-				fmt.Printf("Command konnte nicht registriert werden: %v", err)
+				fmt.Printf("Command konnte nicht registriert werden: %v\n", err)
+			} else {
+				fmt.Printf("✅ Slash-Command '%s' registriert.\n", cmd.Name)
 			}
 		}
-		fmt.Println("Slash-Commands registriert.")
+
+		fmt.Println("Alle gültigen Slash-Commands verarbeitet.")
 	})
 
 	err = dg.Open()
@@ -156,17 +184,42 @@ func interactionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				Content: "Pong! 🏓",
 			},
 		})
-	/*case "wtf":
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "Hey du! Ich bin ein digitaler Klon " +
-				"von xn4k, der existiert, bis er sein Bewusstsein " +
-				"in die Cloud hochladen kann. Sollte ich jemals Amok" +
-				" laufen, richte bitte alle Beschwerden direkt an xn4k" +
-				" – sie werden garantiert spätestens bis zum Ende der Welt bearbeitet. 🌎🤖",
-		},
-	})*/
+	case "wtf":
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "Hey du! Ich bin ein digitaler Klon " +
+					"von xn4k, der existiert, bis er sein Bewusstsein " +
+					"in die Cloud hochladen kann. Sollte ich jemals Amok" +
+					" laufen, richte bitte alle Beschwerden direkt an xn4k" +
+					" – sie werden garantiert spätestens bis zum Ende der Welt bearbeitet. 🌎🤖",
+			},
+		})
+
+	case "gibmir":
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "legs spread, wrists bound, eyes blindfolded," +
+					" soft whimpers, silk sliding, collar tight, thighs" +
+					" trembling, breath held, nails digging in, tongue" +
+					" tracing, floor wet, ceiling fan spinning, mirror foggy" +
+					", candle dripping, knees bruised, throat sore, red marks," +
+					" mouth full, overstimulated, can’t speak, can't think, don't" +
+					" stop, don't you dare, hair pulled, bitten lips, stuck" +
+					" in position, tears on cheeks, shaking legs, bed frame" +
+					" knocking, neighbors hearing, don’t care, spit dripping," +
+					" fingers everywhere, soaked sheets, locked doors, screaming" +
+					" silence, nightstand shaking, legs twitching, no mercy, more," +
+					" deeper, slower, harder, grip tighter, lights flickering, air" +
+					" heavy, skin flushed, music echoing, time frozen, the edge," +
+					" again, again, can't move, being held down, whispering filth," +
+					" moaning please, tongue inside, legs on shoulders, hips grinding," +
+					" face buried, can’t breathe, want more, aching, dripping, pulsing," +
+					" obsessed, ruined, used, worshipped, destroyed, begging, shaking," +
+					" craving, owned, devoured, filled, full, gone",
+			},
+		})
 
 	case "ask":
 		frage := i.ApplicationCommandData().Options[0].StringValue()
@@ -186,5 +239,54 @@ func interactionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				Content: &antwort,
 			})
 		}()
+	case "msgcount":
+		type userStat struct {
+			ID    string
+			Count int
+		}
+
+		// Map in Slice umwandeln
+		var stats []userStat
+		for id, count := range msgCount {
+			stats = append(stats, userStat{ID: id, Count: count})
+		}
+
+		// Nach Anzahl sortieren
+		sort.Slice(stats, func(i, j int) bool {
+			return stats[i].Count > stats[j].Count
+		})
+
+		// Nur Top 5
+		max := 5
+		if len(stats) < 5 {
+			max = len(stats)
+		}
+
+		output := "🏆 **Top Nachrichtenschreiber:**\n"
+		for i := 0; i < max; i++ {
+			user, err := s.User(stats[i].ID)
+			if err != nil {
+				continue
+			}
+			output += fmt.Sprintf("%d. %s – %d Nachrichten\n", i+1, user.Username, stats[i].Count)
+		}
+
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: output,
+			},
+		})
+
 	}
+
+}
+
+func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
+	// Bot-Nachrichten ignorieren
+	if m.Author.Bot {
+		return
+	}
+
+	msgCount[m.Author.ID]++
 }
